@@ -2,87 +2,117 @@
 <html lang="ro">
 <head>
     <meta charset="UTF-8">
-    <title>4K Video Merger - Fixed</title>
+    <title>4K Video Merger - Low RAM Version</title>
     
-    <script>
-        // Acest script forțează Service Worker-ul să ruleze din folderul curent
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function() {
-                navigator.serviceWorker.register('./coi-serviceworker.js');
-            });
-        }
-    </script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/coi-serviceworker/0.1.7/coi-serviceworker.min.js"></script>
+    <script src="coi-serviceworker.js"></script>
     <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 
     <style>
-        body { font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 50px; }
-        .box { background: #1e1e1e; padding: 30px; border-radius: 15px; display: inline-block; border: 1px solid #333; }
-        .status { padding: 10px; margin-bottom: 20px; border-radius: 5px; font-weight: bold; }
-        .green { background: #1b4332; color: #74c69d; }
-        .red { background: #431b1b; color: #ff8787; }
-        .drop { border: 2px dashed #444; padding: 20px; margin: 10px; cursor: pointer; }
-        button { background: #00d1b2; border: none; padding: 15px; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; }
-        button:disabled { background: #444; color: #777; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0a0a0a; color: white; text-align: center; padding: 20px; }
+        .container { max-width: 550px; margin: auto; background: #161616; padding: 30px; border-radius: 15px; border: 1px solid #333; }
+        .status-box { padding: 10px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-size: 14px; }
+        .ok { background: #1b4332; color: #74c69d; }
+        .error { background: #431b1b; color: #ff8787; }
+        .drop-zone { border: 2px dashed #444; padding: 25px; margin: 10px 0; border-radius: 10px; cursor: pointer; transition: 0.2s; }
+        .drop-zone:hover { border-color: #00d1b2; background: #1f1f1f; }
+        .ready { border-color: #00d1b2; color: #00d1b2; }
+        button { width: 100%; background: #00d1b2; color: black; border: none; padding: 15px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        button:disabled { background: #333; color: #666; cursor: not-allowed; }
+        #log { font-size: 12px; color: #888; margin-top: 15px; line-height: 1.5; }
+        progress { width: 100%; height: 12px; margin-top: 10px; display: none; }
     </style>
 </head>
 <body>
 
-<div class="box">
-    <h2>4K Video Merger</h2>
+<div class="container">
+    <h2>4K Video Merger (MP4)</h2>
     
-    <div id="shield" class="status red">⚠️ STARE: Blocat (Așteptare Service Worker)</div>
+    <div id="status-shield" class="status-box error">⚠️ REFRESH (F5) NECESAR</div>
 
-    <div id="v-drop" class="drop">Selectează Video (.webm)</div>
-    <div id="a-drop" class="drop">Selectează Audio (.mp3)</div>
+    <div id="v-zone" class="drop-zone">Încarcă Video (.webm)</div>
+    <div id="a-zone" class="drop-zone">Încarcă Audio (.mp3)</div>
 
-    <button id="run-btn" disabled>PORNEȘTE 4K</button>
-    <p id="info"></p>
+    <button id="process-btn" disabled>PORNEȘTE CONVERSIA 4K</button>
+    <progress id="p-bar" value="0" max="100"></progress>
+    <div id="log">Așteptare fișiere...</div>
 </div>
 
 <script>
-    const shield = document.getElementById('shield');
-    const btn = document.getElementById('run-btn');
+    const shield = document.getElementById('status-shield');
+    const btn = document.getElementById('process-btn');
+    const log = document.getElementById('log');
+    const pBar = document.getElementById('p-bar');
 
-    // Verificare activa
+    // Verificăm dacă mediul este izolat (SharedArrayBuffer activ)
     if (window.crossOriginIsolated) {
-        shield.innerText = "🛡️ STARE: ACTIV (Gata de lucru)";
-        shield.className = "status green";
+        shield.innerText = "🛡️ SECURITATE OK: Motor pornit";
+        shield.className = "status-box ok";
         btn.disabled = false;
-    } else {
-        console.log("Se așteaptă activarea SharedArrayBuffer...");
     }
 
     const { createFFmpeg, fetchFile } = FFmpeg;
     const ffmpeg = createFFmpeg({ log: true });
-    let v, a;
+    let videoFile, audioFile;
 
-    const setup = (id, isV) => {
-        document.getElementById(id).onclick = () => {
-            let i = document.createElement('input'); i.type = 'file';
-            i.onchange = e => { 
-                if(isV) v = e.target.files[0]; else a = e.target.files[0];
-                document.getElementById(id).innerText = "✅ " + e.target.files[0].name;
+    function setup(id, type) {
+        const zone = document.getElementById(id);
+        zone.onclick = () => {
+            const input = document.createElement('input'); input.type = 'file';
+            input.onchange = e => {
+                const f = e.target.files[0];
+                if(type === 'v') videoFile = f; else audioFile = f;
+                zone.innerText = "✅ " + f.name;
+                zone.classList.add('ready');
             };
-            i.click();
+            input.click();
         };
-    };
-    setup('v-drop', true); setup('a-drop', false);
+    }
+    setup('v-zone', 'v'); setup('a-zone', 'a');
 
     btn.onclick = async () => {
-        if(!v || !a) return alert("Pune ambele fisiere!");
-        btn.disabled = true;
-        document.getElementById('info').innerText = "Se procesează... durează câteva minute.";
+        if(!videoFile || !audioFile) return alert("Selectează ambele fișiere!");
         
+        btn.disabled = true;
+        pBar.style.display = "block";
+        log.innerText = "Inițializare FFmpeg...";
+
         if(!ffmpeg.isLoaded()) await ffmpeg.load();
-        ffmpeg.FS('writeFile', 'v', await fetchFile(v));
-        ffmpeg.FS('writeFile', 'a', await fetchFile(a));
 
-        await ffmpeg.run('-i', 'v', '-i', 'a', '-vf', 'scale=3840:2160', '-shortest', 'out.webm');
+        ffmpeg.setProgress(({ ratio }) => {
+            pBar.value = ratio * 100;
+            log.innerText = `Procesare 4K: ${Math.round(ratio * 100)}%`;
+        });
 
-        const data = ffmpeg.FS('readFile', 'out.webm');
-        const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/webm' }));
-        document.getElementById('info').innerHTML = `<a href="${url}" download="4k_video.webm" style="color:#00d1b2">DESCARCĂ VIDEO 4K</a>`;
+        log.innerText = "Încărcare fișiere în RAM...";
+        ffmpeg.FS('writeFile', 'v', await fetchFile(videoFile));
+        ffmpeg.FS('writeFile', 'a', await fetchFile(audioFile));
+
+        log.innerText = "Randare 4K în curs... (Vă rugăm așteptați)";
+
+        try {
+            // Comandă optimizată pentru a evita OOM (Out of Memory)
+            await ffmpeg.run(
+                '-i', 'v', 
+                '-i', 'a', 
+                '-vf', 'scale=3840:2160:force_original_aspect_ratio=decrease,pad=3840:2160:(ow-iw)/2:(oh-ih)/2',
+                '-c:v', 'libx264', 
+                '-preset', 'ultrafast', 
+                '-crf', '28', 
+                '-map', '0:v:0', 
+                '-map', '1:a:0', 
+                '-shortest', 
+                'output_4k.mp4'
+            );
+
+            const data = ffmpeg.FS('readFile', 'output_4k.mp4');
+            const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+            
+            log.innerHTML = `<a href="${url}" download="final_4k.mp4" style="color:#00d1b2; font-size:18px; font-weight:bold;">⬇️ DESCARCĂ VIDEO 4K (.MP4)</a>`;
+        } catch (err) {
+            log.innerText = "EROARE RAM: Fișierul este prea mare pentru browser.";
+            console.error(err);
+        }
+        btn.disabled = false;
     };
 </script>
 </body>
