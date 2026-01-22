@@ -2,138 +2,88 @@
 <html lang="ro">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>4K Video Merger - Pro</title>
+    <title>4K Video Merger - Fixed</title>
     
     <script>
-        window.coi = { doRegistration: true, quiet: false };
+        // Acest script forțează Service Worker-ul să ruleze din folderul curent
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('./coi-serviceworker.js');
+            });
+        }
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/coi-serviceworker/0.1.7/coi-serviceworker.min.js"></script>
-    
     <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f0f; color: white; display: flex; justify-content: center; padding: 40px; }
-        .card { background: #1a1a1a; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.7); width: 100%; max-width: 500px; text-align: center; border: 1px solid #333; }
-        .shield { padding: 10px; border-radius: 8px; margin-bottom: 20px; font-weight: bold; font-size: 14px; }
-        .shield-ok { background: #1b4332; color: #74c69d; border: 1px solid #2d6a4f; }
-        .shield-fail { background: #431b1b; color: #ff8787; border: 1px solid #6a2d2d; }
-        .drop-zone { border: 2px dashed #444; padding: 30px; margin: 10px 0; border-radius: 12px; cursor: pointer; transition: 0.3s; }
-        .drop-zone:hover { border-color: #00d1b2; background: #222; }
-        .selected { border-color: #00d1b2; color: #00d1b2; background: rgba(0, 209, 178, 0.05); }
-        button { width: 100%; background: #00d1b2; color: black; border: none; padding: 15px; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; margin-top: 15px; }
-        button:disabled { background: #333; color: #777; cursor: not-allowed; }
-        #progress-container { width: 100%; background: #333; height: 8px; border-radius: 4px; margin-top: 20px; display: none; overflow: hidden; }
-        #progress-bar { width: 0%; height: 100%; background: #00d1b2; transition: width 0.3s; }
-        #log { font-size: 12px; color: #888; margin-top: 15px; }
+        body { font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 50px; }
+        .box { background: #1e1e1e; padding: 30px; border-radius: 15px; display: inline-block; border: 1px solid #333; }
+        .status { padding: 10px; margin-bottom: 20px; border-radius: 5px; font-weight: bold; }
+        .green { background: #1b4332; color: #74c69d; }
+        .red { background: #431b1b; color: #ff8787; }
+        .drop { border: 2px dashed #444; padding: 20px; margin: 10px; cursor: pointer; }
+        button { background: #00d1b2; border: none; padding: 15px; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; }
+        button:disabled { background: #444; color: #777; }
     </style>
 </head>
 <body>
 
-<div class="card">
-    <h2 style="margin-top:0">Video Merger 4K</h2>
+<div class="box">
+    <h2>4K Video Merger</h2>
     
-    <div id="security-shield" class="shield shield-fail">Se verifică securitatea...</div>
+    <div id="shield" class="status red">⚠️ STARE: Blocat (Așteptare Service Worker)</div>
 
-    <div id="video-drop" class="drop-zone">Trage VIDEO (.webm)</div>
-    <div id="audio-drop" class="drop-zone">Trage AUDIO (.mp3)</div>
+    <div id="v-drop" class="drop">Selectează Video (.webm)</div>
+    <div id="a-drop" class="drop">Selectează Audio (.mp3)</div>
 
-    <button id="start-btn" disabled>PORNEȘTE CONVERSIA</button>
-
-    <div id="progress-container">
-        <div id="progress-bar"></div>
-    </div>
-    <p id="status-text" style="font-size: 14px; color: #bbb;"></p>
-    <div id="log">Așteptare fișiere...</div>
+    <button id="run-btn" disabled>PORNEȘTE 4K</button>
+    <p id="info"></p>
 </div>
 
 <script>
-    const shield = document.getElementById('security-shield');
-    const startBtn = document.getElementById('start-btn');
-    const log = document.getElementById('log');
-    const progressContainer = document.getElementById('progress-container');
-    const progressBar = document.getElementById('progress-bar');
-    const statusText = document.getElementById('status-text');
+    const shield = document.getElementById('shield');
+    const btn = document.getElementById('run-btn');
 
-    // VERIFICARE SECURITATE (SharedArrayBuffer)
+    // Verificare activa
     if (window.crossOriginIsolated) {
-        shield.innerText = "🛡️ SECURITATE OK: SharedArrayBuffer activ";
-        shield.className = "shield shield-ok";
-        startBtn.disabled = false;
+        shield.innerText = "🛡️ STARE: ACTIV (Gata de lucru)";
+        shield.className = "status green";
+        btn.disabled = false;
     } else {
-        shield.innerText = "⚠️ EROARE: Dă Refresh (F5) pentru activare";
-        shield.className = "shield shield-fail";
-        console.warn("SharedArrayBuffer nu este disponibil încă. Service Worker-ul are nevoie de refresh.");
+        console.log("Se așteaptă activarea SharedArrayBuffer...");
     }
 
     const { createFFmpeg, fetchFile } = FFmpeg;
     const ffmpeg = createFFmpeg({ log: true });
-    let videoFile, audioFile;
+    let v, a;
 
-    // Configurare zone de drop
-    function setupDrop(id, type) {
-        const zone = document.getElementById(id);
-        zone.onclick = () => {
-            const input = document.createElement('input'); input.type = 'file';
-            input.onchange = e => handleFile(e.target.files[0], zone, type);
-            input.click();
+    const setup = (id, isV) => {
+        document.getElementById(id).onclick = () => {
+            let i = document.createElement('input'); i.type = 'file';
+            i.onchange = e => { 
+                if(isV) v = e.target.files[0]; else a = e.target.files[0];
+                document.getElementById(id).innerText = "✅ " + e.target.files[0].name;
+            };
+            i.click();
         };
-        zone.ondragover = e => { e.preventDefault(); zone.style.borderColor = "#00d1b2"; };
-        zone.ondragleave = () => { zone.style.borderColor = "#444"; };
-        zone.ondrop = e => { e.preventDefault(); handleFile(e.dataTransfer.files[0], zone, type); };
-    }
+    };
+    setup('v-drop', true); setup('a-drop', false);
 
-    function handleFile(file, zone, type) {
-        if (!file) return;
-        if (type === 'v') videoFile = file; else audioFile = file;
-        zone.innerText = "✅ " + file.name;
-        zone.classList.add('selected');
-        log.innerText = "Fișiere gata pentru procesare.";
-    }
-
-    setupDrop('video-drop', 'v');
-    setupDrop('audio-drop', 'a');
-
-    startBtn.onclick = async () => {
-        if (!videoFile || !audioFile) return alert("Selectează ambele fișiere!");
+    btn.onclick = async () => {
+        if(!v || !a) return alert("Pune ambele fisiere!");
+        btn.disabled = true;
+        document.getElementById('info').innerText = "Se procesează... durează câteva minute.";
         
-        startBtn.disabled = true;
-        progressContainer.style.display = 'block';
-        log.innerText = "Se inițializează motorul FFmpeg...";
+        if(!ffmpeg.isLoaded()) await ffmpeg.load();
+        ffmpeg.FS('writeFile', 'v', await fetchFile(v));
+        ffmpeg.FS('writeFile', 'a', await fetchFile(a));
 
-        if (!ffmpeg.isLoaded()) await ffmpeg.load();
+        await ffmpeg.run('-i', 'v', '-i', 'a', '-vf', 'scale=3840:2160', '-shortest', 'out.webm');
 
-        ffmpeg.setProgress(({ ratio }) => {
-            const pct = Math.round(ratio * 100);
-            progressBar.style.width = pct + "%";
-            statusText.innerText = "Procesare 4K: " + pct + "%";
-        });
-
-        log.innerText = "Se încarcă fișierele în RAM...";
-        ffmpeg.FS('writeFile', 'in_v.webm', await fetchFile(videoFile));
-        ffmpeg.FS('writeFile', 'in_a.mp3', await fetchFile(audioFile));
-
-        log.innerText = "Conversie 4K începută... (Nu închide pagina!)";
-
-        // Comanda FFmpeg pentru scalare 4K si mixare
-        await ffmpeg.run(
-            '-i', 'in_v.webm', 
-            '-i', 'in_a.mp3', 
-            '-vf', 'scale=3840:2160:force_original_aspect_ratio=decrease,pad=3840:2160:(ow-iw)/2:(oh-ih)/2', 
-            '-map', '0:v:0', 
-            '-map', '1:a:0', 
-            '-shortest', 
-            'output_4k.webm'
-        );
-
-        const data = ffmpeg.FS('readFile', 'output_4k.webm');
+        const data = ffmpeg.FS('readFile', 'out.webm');
         const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/webm' }));
-        
-        statusText.innerHTML = `<a href="${url}" download="video_final_4k.webm" style="color:#00d1b2; font-weight:bold; text-decoration:none; font-size:18px;">⬇️ DESCARCĂ VIDEO 4K</a>`;
-        log.innerText = "Finalizat cu succes!";
-        startBtn.disabled = false;
+        document.getElementById('info').innerHTML = `<a href="${url}" download="4k_video.webm" style="color:#00d1b2">DESCARCĂ VIDEO 4K</a>`;
     };
 </script>
-
 </body>
 </html>
